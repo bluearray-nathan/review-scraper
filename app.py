@@ -50,8 +50,7 @@ def get_reviews(place_id, api_key, country_code, lang_code, target_count):
     """
     reviews_data = []
     
-    # Calculate how many pages we need (approx 10 reviews per page)
-    # e.g. 50 reviews -> 5 pages
+    # Calculate pages needed (10 reviews per page default)
     max_pages = math.ceil(target_count / 10)
     
     # Initial Params
@@ -61,7 +60,8 @@ def get_reviews(place_id, api_key, country_code, lang_code, target_count):
         "api_key": api_key,
         "sort_by": "newestFirst",
         "gl": country_code,
-        "hl": lang_code
+        "hl": lang_code,
+        # 'num' is purposefully omitted here to avoid page 1 errors
     }
     
     try:
@@ -76,19 +76,23 @@ def get_reviews(place_id, api_key, country_code, lang_code, target_count):
     status_text = st.empty()
     
     while page_count < max_pages:
-        # Update Progress
-        current_progress = (len(reviews_data) / target_count)
-        if current_progress > 1.0: current_progress = 1.0
-        progress_bar.progress(current_progress)
-        status_text.caption(f"Fetching reviews... ({len(reviews_data)} collected)")
+        # Update Progress UI
+        current_len = len(reviews_data)
+        progress_val = min(current_len / target_count, 1.0)
+        progress_bar.progress(progress_val)
+        status_text.caption(f"Fetching reviews... ({current_len}/{target_count} collected)")
         
-        # Check for error
+        # Check for API errors
         if "error" in results:
-            st.error(f"SerpApi Error: {results['error']}")
+            st.error(f"SerpApi Error on page {page_count+1}: {results['error']}")
             break
             
         new_reviews = results.get("reviews", [])
         
+        # If no reviews returned, stop
+        if not new_reviews:
+            break
+
         # Append new reviews
         for review in new_reviews:
             reviews_data.append({
@@ -102,17 +106,20 @@ def get_reviews(place_id, api_key, country_code, lang_code, target_count):
         if len(reviews_data) >= target_count:
             break
         
-        # Pagination Logic
-        if "serpapi_pagination" not in results: break
-        if "next_page_token" not in results["serpapi_pagination"]: break
+        # Pagination Check
+        if "serpapi_pagination" not in results: 
+            break
+        if "next_page_token" not in results["serpapi_pagination"]: 
+            break
             
         page_count += 1
         
-        # PREPARE NEXT PAGE
+        # --- PAGINATION FIX ---
+        # 1. Update the token
         params["next_page_token"] = results["serpapi_pagination"]["next_page_token"]
         
-        # IMPORTANT: Remove place_id on subsequent pages to avoid API conflict
-        if "place_id" in params: del params["place_id"]
+        # 2. DO NOT delete place_id. 
+        # Keep 'place_id' in params so the API knows the context.
         
         search = GoogleSearch(params)
         results = search.get_dict()
@@ -120,7 +127,6 @@ def get_reviews(place_id, api_key, country_code, lang_code, target_count):
     progress_bar.empty()
     status_text.empty()
     
-    # Return exactly the requested amount (or less if not found)
     return pd.DataFrame(reviews_data[:target_count])
 
 def analyze_with_gemini(data_dict, lang_name):
@@ -202,7 +208,7 @@ with st.sidebar:
     
     st.divider()
     
-    # NEW: SLIDER FOR VOLUME
+    # SLIDER FOR VOLUME
     st.header("📊 Data Volume")
     target_count = st.slider("Reviews to Analyze", min_value=10, max_value=100, value=30, step=10, 
                              help="Higher number = More accuracy but uses more credits.")
