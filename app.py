@@ -191,7 +191,7 @@ def analyze_with_gemini(data_dict, lang_name):
         return f"AI Error: {str(e)}"
 
 # --- MAIN UI ---
-st.title("📍 Voice of Customer: AI Analyzer")
+st.title("📍 Google reviews analyser: Customer pain points")
 st.markdown("Enter a **Google Place ID** to analyze customer pain points.")
 
 # SIDEBAR SETTINGS
