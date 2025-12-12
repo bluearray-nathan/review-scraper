@@ -111,7 +111,7 @@ def analyze_with_gemini(data_dict, lang_name):
     Analyzes reviews using Gemini to find 5-10 pain points.
     """
     genai.configure(api_key=GENAI_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     
     # Prepare text for prompt
     prompt_context = ""
