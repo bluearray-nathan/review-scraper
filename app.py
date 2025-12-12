@@ -6,8 +6,7 @@ import google.generativeai as genai
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Review AI Analyst", page_icon="🧠", layout="wide")
 
-# --- DATA DICTIONARIES (Add more as needed) ---
-# Maps "Display Name" -> "Google Code"
+# --- DATA DICTIONARIES ---
 COUNTRY_CODES = {
     "United Kingdom": "gb",
     "United States": "us",
@@ -43,35 +42,10 @@ except KeyError:
 
 # --- HELPER FUNCTIONS ---
 
-def get_place_id(business_name, api_key, country_code, lang_code):
-    """Finds the Place ID using specific Country (gl) and Language (hl) settings."""
-    if not business_name: return None
-    
-    params = {
-        "engine": "google_maps",
-        "q": business_name,
-        "type": "search",
-        "api_key": api_key,
-        "num": 1,
-        "gl": country_code,   # <--- Forces search from this country
-        "hl": lang_code       # <--- Sets interface language
-    }
-    
-    search = GoogleSearch(params)
-    results = search.get_dict()
-    
-    # 1. Try Local Results (The standard map pins)
-    if "local_results" in results and len(results["local_results"]) > 0:
-        return results["local_results"][0].get("place_id")
-        
-    # 2. Backup: Check if it found a specific "Place" directly
-    if "place_results" in results:
-        return results["place_results"].get("place_id")
-        
-    return None
-
 def get_reviews(place_id, api_key, country_code, lang_code, max_pages=3):
-    """Pulls reviews using the selected language/region settings."""
+    """
+    Pulls reviews directly using a Place ID.
+    """
     reviews_data = []
     
     params = {
@@ -79,16 +53,32 @@ def get_reviews(place_id, api_key, country_code, lang_code, max_pages=3):
         "place_id": place_id,
         "api_key": api_key,
         "sort_by": "newestFirst",
-        "gl": country_code,   # <--- Critical for getting local review sorting
-        "hl": lang_code       # <--- Returns reviews in this language (if translated)
+        "gl": country_code,
+        "hl": lang_code
     }
     
-    search = GoogleSearch(params)
-    results = search.get_dict()
+    try:
+        search = GoogleSearch(params)
+        results = search.get_dict()
+    except Exception as e:
+        st.error(f"Error fetching data from SerpApi: {e}")
+        return pd.DataFrame()
+    
     page_count = 0
     
+    # Progress indicator
+    status_text = st.empty()
+    
     while page_count < max_pages:
+        status_text.caption(f"Scraping page {page_count+1}...")
+        
+        # Check for error in result
+        if "error" in results:
+            st.error(f"SerpApi Error: {results['error']}")
+            break
+            
         new_reviews = results.get("reviews", [])
+        
         for review in new_reviews:
             reviews_data.append({
                 "rating": review.get("rating"),
@@ -97,16 +87,20 @@ def get_reviews(place_id, api_key, country_code, lang_code, max_pages=3):
                 "author": review.get("user", {}).get("name")
             })
             
+        # Pagination Logic
         if "serpapi_pagination" not in results: break
         if "next_page_token" not in results["serpapi_pagination"]: break
             
         page_count += 1
         params["next_page_token"] = results["serpapi_pagination"]["next_page_token"]
+        
+        # 'place_id' conflicts with 'next_page_token', so we remove it for subsequent pages
         if "place_id" in params: del params["place_id"]
         
         search = GoogleSearch(params)
         results = search.get_dict()
         
+    status_text.empty()
     return pd.DataFrame(reviews_data)
 
 def analyze_with_gemini(data_dict, lang_name):
@@ -130,7 +124,7 @@ def analyze_with_gemini(data_dict, lang_name):
         formatted_reviews = "\n".join([f"- {r}" for r in neg_reviews[:50]])
         prompt_context += f"\n\n--- REVIEWS FOR {name.upper()} ---\n{formatted_reviews}\n"
 
-    # --- UPDATED PROMPTS ---
+    # --- PROMPTS ---
     if len(data_dict) > 1:
         # COMPETITOR MODE
         prompt = f"""
@@ -170,7 +164,7 @@ def analyze_with_gemini(data_dict, lang_name):
 
 # --- MAIN UI ---
 st.title("📍 Voice of Customer: AI Analyzer")
-st.markdown("Scrape Google Reviews and use AI to identify the **Top 5-10** customer pain points.")
+st.markdown("Enter a **Google Place ID** to analyze customer pain points.")
 
 # SIDEBAR SETTINGS
 with st.sidebar:
@@ -179,79 +173,75 @@ with st.sidebar:
     
     st.divider()
     
-    st.header("🌍 Search Settings")
-    
-    # Country Selector
-    selected_country_name = st.selectbox("Search Location (Country)", list(COUNTRY_CODES.keys()), index=0)
+    st.header("🌍 Region Settings")
+    selected_country_name = st.selectbox("Search Location", list(COUNTRY_CODES.keys()), index=0)
     country_code = COUNTRY_CODES[selected_country_name]
     
-    # Language Selector
     selected_lang_name = st.selectbox("Language", list(LANGUAGE_CODES.keys()), index=0)
     lang_code = LANGUAGE_CODES[selected_lang_name]
-    
-    st.info(f"Searching as if in: **{selected_country_name}**\nLanguage: **{selected_lang_name}**")
+
+# HELPER TEXT
+st.info("💡 Don't know the Place ID? Use the [Google Place ID Finder](https://developers.google.com/maps/documentation/places/web-service/place-id) to find it.")
 
 # MAIN INPUTS
 col1, col2 = st.columns(2)
 with col1:
-    target_business = st.text_input("Main Business Name", placeholder="e.g. So Energy")
+    target_id = st.text_input("Main Place ID (Required)", placeholder="e.g. ChIJ...")
+    target_name = "Main Business" # Default label since we don't have the name yet
 with col2:
-    competitor_business = st.text_input("Competitor (Optional)", placeholder="e.g. Bulb Energy")
+    competitor_id = st.text_input("Competitor Place ID (Optional)", placeholder="e.g. ChIJ...")
+    competitor_name = "Competitor"
 
 # RUN BUTTON
 if st.button("Analyze Reviews", type="primary"):
     if not user_api_key:
-        st.warning("Please enter your SerpApi key in the sidebar to proceed.")
-    elif not target_business:
-        st.warning("Please enter a business name.")
+        st.warning("Please enter your SerpApi key in the sidebar.")
+    elif not target_id:
+        st.warning("Please enter a Place ID.")
     else:
         results_store = {}
         
         try:
-            with st.status(f"🔍 Analyzing {target_business}...", expanded=True) as status:
-                # 1. Scrape Main Business
-                status.write(f"Searching for '{target_business}' in {selected_country_name}...")
+            with st.status("🚀 Starting Analysis...", expanded=True) as status:
                 
-                place_id = get_place_id(target_business, user_api_key, country_code, lang_code)
+                # 1. SCRAPE MAIN BUSINESS
+                status.write(f"Fetching reviews for ID: {target_id}...")
+                df_target = get_reviews(target_id, user_api_key, country_code, lang_code)
                 
-                if place_id:
-                    status.write("Fetching reviews...")
-                    df_target = get_reviews(place_id, user_api_key, country_code, lang_code)
-                    results_store[target_business] = df_target
-                    status.write(f"✅ Found {len(df_target)} reviews.")
+                if not df_target.empty:
+                    results_store[target_name] = df_target
+                    status.write(f"✅ Loaded {len(df_target)} reviews.")
                 else:
-                    status.update(label="Business not found", state="error")
-                    st.error(f"Could not find '{target_business}' in {selected_country_name}. Try adding the city name.")
+                    status.update(label="Failed to load reviews", state="error")
+                    st.error("No reviews found. Check the Place ID.")
                     st.stop()
 
-                # 2. Scrape Competitor
-                if competitor_business:
-                    status.write(f"Searching for competitor: {competitor_business}...")
-                    comp_id = get_place_id(competitor_business, user_api_key, country_code, lang_code)
-                    if comp_id:
-                        df_comp = get_reviews(comp_id, user_api_key, country_code, lang_code)
-                        results_store[competitor_business] = df_comp
-                        status.write(f"✅ Found {len(df_comp)} competitor reviews.")
+                # 2. SCRAPE COMPETITOR
+                if competitor_id:
+                    status.write(f"Fetching reviews for Competitor ID: {competitor_id}...")
+                    df_comp = get_reviews(competitor_id, user_api_key, country_code, lang_code)
+                    if not df_comp.empty:
+                        results_store[competitor_name] = df_comp
+                        status.write(f"✅ Loaded {len(df_comp)} competitor reviews.")
                 
                 status.update(label="Scraping Complete! Running AI Analysis...", state="complete")
 
-            # 3. AI Analysis
+            # 3. AI ANALYSIS
             if results_store:
                 st.divider()
                 st.subheader("🧠 Top Pain Points Report")
                 with st.spinner("Generating insights..."):
-                    # Pass the language name so Gemini answers in that language
                     analysis = analyze_with_gemini(results_store, selected_lang_name)
                 st.markdown(analysis)
                 
-                # 4. Raw Data
+                # 4. RAW DATA
                 with st.expander("View Raw Data"):
                     tab1, tab2 = st.tabs(["Main Business", "Competitor"])
                     with tab1:
-                        st.dataframe(results_store[target_business])
+                        st.dataframe(results_store[target_name])
                     with tab2:
-                        if competitor_business and competitor_business in results_store:
-                            st.dataframe(results_store[competitor_business])
+                        if competitor_name in results_store:
+                            st.dataframe(results_store[competitor_name])
                         else:
                             st.write("No competitor data.")
 
