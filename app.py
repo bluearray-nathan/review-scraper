@@ -45,19 +45,18 @@ except KeyError:
 def get_reviews(place_id, api_key, country_code, lang_code, max_pages=3):
     """
     Pulls reviews directly using a Place ID.
-    FIXED: Keeps place_id in params for pagination.
+    FIXED: Removed 'num' parameter from initial request to prevent API error.
     """
     reviews_data = []
     
-    # Initial Params
+    # Initial Params (NO 'num' parameter allowed on page 1)
     params = {
         "engine": "google_maps_reviews",
         "place_id": place_id,
         "api_key": api_key,
         "sort_by": "newestFirst",
         "gl": country_code,
-        "hl": lang_code,
-        "num": 20  # Optimization: Fetch 20 reviews per page (Max allowed)
+        "hl": lang_code
     }
     
     try:
@@ -95,8 +94,11 @@ def get_reviews(place_id, api_key, country_code, lang_code, max_pages=3):
         page_count += 1
         
         # UPDATE PARAMS FOR NEXT PAGE
-        # We keep 'place_id' and just ADD the 'next_page_token'
+        # We keep 'place_id' and add the 'next_page_token'
         params["next_page_token"] = results["serpapi_pagination"]["next_page_token"]
+        
+        # On subsequent pages, 'num' IS allowed if you want to try forcing more, 
+        # but it's safer to leave it off to avoid conflicts.
         
         search = GoogleSearch(params)
         results = search.get_dict()
@@ -109,7 +111,7 @@ def analyze_with_gemini(data_dict, lang_name):
     Analyzes reviews using Gemini to find 5-10 pain points.
     """
     genai.configure(api_key=GENAI_KEY)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     # Prepare text for prompt
     prompt_context = ""
@@ -188,7 +190,7 @@ st.info("💡 Don't know the Place ID? Use the [Google Place ID Finder](https://
 col1, col2 = st.columns(2)
 with col1:
     target_id = st.text_input("Main Place ID (Required)", placeholder="e.g. ChIJ...")
-    target_name = "Main Business" # Default label
+    target_name = "Main Business" 
 with col2:
     competitor_id = st.text_input("Competitor Place ID (Optional)", placeholder="e.g. ChIJ...")
     competitor_name = "Competitor"
