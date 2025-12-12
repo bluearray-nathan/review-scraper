@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from serpapi import GoogleSearch
 import google.generativeai as genai
+import math
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Review AI Analyst", page_icon="🧠", layout="wide")
@@ -42,14 +43,18 @@ except KeyError:
 
 # --- HELPER FUNCTIONS ---
 
-def get_reviews(place_id, api_key, country_code, lang_code, max_pages=3):
+def get_reviews(place_id, api_key, country_code, lang_code, target_count):
     """
     Pulls reviews directly using a Place ID.
-    FIXED: Removed 'num' parameter from initial request to prevent API error.
+    Loops until 'target_count' is reached or no more reviews exist.
     """
     reviews_data = []
     
-    # Initial Params (NO 'num' parameter allowed on page 1)
+    # Calculate how many pages we need (approx 10 reviews per page)
+    # e.g. 50 reviews -> 5 pages
+    max_pages = math.ceil(target_count / 10)
+    
+    # Initial Params
     params = {
         "engine": "google_maps_reviews",
         "place_id": place_id,
@@ -67,18 +72,24 @@ def get_reviews(place_id, api_key, country_code, lang_code, max_pages=3):
         return pd.DataFrame()
     
     page_count = 0
+    progress_bar = st.progress(0)
     status_text = st.empty()
     
     while page_count < max_pages:
-        status_text.caption(f"Scraping page {page_count+1}...")
+        # Update Progress
+        current_progress = (len(reviews_data) / target_count)
+        if current_progress > 1.0: current_progress = 1.0
+        progress_bar.progress(current_progress)
+        status_text.caption(f"Fetching reviews... ({len(reviews_data)} collected)")
         
-        # Check for error in result
+        # Check for error
         if "error" in results:
             st.error(f"SerpApi Error: {results['error']}")
             break
             
         new_reviews = results.get("reviews", [])
         
+        # Append new reviews
         for review in new_reviews:
             reviews_data.append({
                 "rating": review.get("rating"),
@@ -86,6 +97,10 @@ def get_reviews(place_id, api_key, country_code, lang_code, max_pages=3):
                 "date": review.get("date"),
                 "author": review.get("user", {}).get("name")
             })
+            
+        # Stop if we have enough
+        if len(reviews_data) >= target_count:
+            break
         
         # Pagination Logic
         if "serpapi_pagination" not in results: break
@@ -93,25 +108,27 @@ def get_reviews(place_id, api_key, country_code, lang_code, max_pages=3):
             
         page_count += 1
         
-        # UPDATE PARAMS FOR NEXT PAGE
-        # We keep 'place_id' and add the 'next_page_token'
+        # PREPARE NEXT PAGE
         params["next_page_token"] = results["serpapi_pagination"]["next_page_token"]
         
-        # On subsequent pages, 'num' IS allowed if you want to try forcing more, 
-        # but it's safer to leave it off to avoid conflicts.
+        # IMPORTANT: Remove place_id on subsequent pages to avoid API conflict
+        if "place_id" in params: del params["place_id"]
         
         search = GoogleSearch(params)
         results = search.get_dict()
         
+    progress_bar.empty()
     status_text.empty()
-    return pd.DataFrame(reviews_data)
+    
+    # Return exactly the requested amount (or less if not found)
+    return pd.DataFrame(reviews_data[:target_count])
 
 def analyze_with_gemini(data_dict, lang_name):
     """
-    Analyzes reviews using Gemini to find 5-10 pain points.
+    Analyzes reviews using Gemini.
     """
     genai.configure(api_key=GENAI_KEY)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     # Prepare text for prompt
     prompt_context = ""
@@ -123,8 +140,8 @@ def analyze_with_gemini(data_dict, lang_name):
             prompt_context += f"\n\n--- REVIEWS FOR {name.upper()} ---\n(No negative reviews found)\n"
             continue
 
-        # We take up to 50 reviews
-        formatted_reviews = "\n".join([f"- {r}" for r in neg_reviews[:50]])
+        # We take up to 60 reviews for analysis to fit in context window
+        formatted_reviews = "\n".join([f"- {r}" for r in neg_reviews[:60]])
         prompt_context += f"\n\n--- REVIEWS FOR {name.upper()} ---\n{formatted_reviews}\n"
 
     # --- PROMPTS ---
@@ -176,12 +193,19 @@ with st.sidebar:
     
     st.divider()
     
-    st.header("🌍 Region Settings")
+    st.header("🌍 Search Settings")
     selected_country_name = st.selectbox("Search Location", list(COUNTRY_CODES.keys()), index=0)
     country_code = COUNTRY_CODES[selected_country_name]
     
     selected_lang_name = st.selectbox("Language", list(LANGUAGE_CODES.keys()), index=0)
     lang_code = LANGUAGE_CODES[selected_lang_name]
+    
+    st.divider()
+    
+    # NEW: SLIDER FOR VOLUME
+    st.header("📊 Data Volume")
+    target_count = st.slider("Reviews to Analyze", min_value=10, max_value=100, value=30, step=10, 
+                             help="Higher number = More accuracy but uses more credits.")
 
 # HELPER TEXT
 st.info("💡 Don't know the Place ID? Use the [Google Place ID Finder](https://developers.google.com/maps/documentation/places/web-service/place-id) to find it.")
@@ -208,8 +232,8 @@ if st.button("Analyze Reviews", type="primary"):
             with st.status("🚀 Starting Analysis...", expanded=True) as status:
                 
                 # 1. SCRAPE MAIN BUSINESS
-                status.write(f"Fetching reviews for ID: {target_id}...")
-                df_target = get_reviews(target_id, user_api_key, country_code, lang_code)
+                status.write(f"Fetching {target_count} reviews for ID: {target_id}...")
+                df_target = get_reviews(target_id, user_api_key, country_code, lang_code, target_count)
                 
                 if not df_target.empty:
                     results_store[target_name] = df_target
@@ -222,7 +246,7 @@ if st.button("Analyze Reviews", type="primary"):
                 # 2. SCRAPE COMPETITOR
                 if competitor_id:
                     status.write(f"Fetching reviews for Competitor ID: {competitor_id}...")
-                    df_comp = get_reviews(competitor_id, user_api_key, country_code, lang_code)
+                    df_comp = get_reviews(competitor_id, user_api_key, country_code, lang_code, target_count)
                     if not df_comp.empty:
                         results_store[competitor_name] = df_comp
                         status.write(f"✅ Loaded {len(df_comp)} competitor reviews.")
