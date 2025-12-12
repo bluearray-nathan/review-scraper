@@ -134,7 +134,7 @@ def analyze_with_gemini(data_dict, lang_name):
     Analyzes reviews using Gemini.
     """
     genai.configure(api_key=GENAI_KEY)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     # Prepare text for prompt
     prompt_context = ""
@@ -146,8 +146,10 @@ def analyze_with_gemini(data_dict, lang_name):
             prompt_context += f"\n\n--- REVIEWS FOR {name.upper()} ---\n(No negative reviews found)\n"
             continue
 
-        # We take up to 60 reviews for analysis to fit in context window
-        formatted_reviews = "\n".join([f"- {r}" for r in neg_reviews[:60]])
+        # --- UNLOCKED LIMIT ---
+        # Send ALL negative reviews found to Gemini
+        formatted_reviews = "\n".join([f"- {r}" for r in neg_reviews])
+        
         prompt_context += f"\n\n--- REVIEWS FOR {name.upper()} ---\n{formatted_reviews}\n"
 
     # --- PROMPTS ---
