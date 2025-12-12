@@ -192,7 +192,7 @@ def analyze_with_gemini(data_dict, lang_name):
 
 # --- MAIN UI ---
 st.title("📍 Google reviews analyser: Customer pain points")
-st.markdown("Enter a **Google Place ID** to analyze customer pain points.")
+st.markdown("Enter a **Google Place ID** to analyse customer pain points.")
 
 # SIDEBAR SETTINGS
 with st.sidebar:
