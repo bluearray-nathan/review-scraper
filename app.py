@@ -45,16 +45,19 @@ except KeyError:
 def get_reviews(place_id, api_key, country_code, lang_code, max_pages=3):
     """
     Pulls reviews directly using a Place ID.
+    FIXED: Keeps place_id in params for pagination.
     """
     reviews_data = []
     
+    # Initial Params
     params = {
         "engine": "google_maps_reviews",
         "place_id": place_id,
         "api_key": api_key,
         "sort_by": "newestFirst",
         "gl": country_code,
-        "hl": lang_code
+        "hl": lang_code,
+        "num": 20  # Optimization: Fetch 20 reviews per page (Max allowed)
     }
     
     try:
@@ -65,8 +68,6 @@ def get_reviews(place_id, api_key, country_code, lang_code, max_pages=3):
         return pd.DataFrame()
     
     page_count = 0
-    
-    # Progress indicator
     status_text = st.empty()
     
     while page_count < max_pages:
@@ -86,16 +87,16 @@ def get_reviews(place_id, api_key, country_code, lang_code, max_pages=3):
                 "date": review.get("date"),
                 "author": review.get("user", {}).get("name")
             })
-            
+        
         # Pagination Logic
         if "serpapi_pagination" not in results: break
         if "next_page_token" not in results["serpapi_pagination"]: break
             
         page_count += 1
-        params["next_page_token"] = results["serpapi_pagination"]["next_page_token"]
         
-        # 'place_id' conflicts with 'next_page_token', so we remove it for subsequent pages
-        if "place_id" in params: del params["place_id"]
+        # UPDATE PARAMS FOR NEXT PAGE
+        # We keep 'place_id' and just ADD the 'next_page_token'
+        params["next_page_token"] = results["serpapi_pagination"]["next_page_token"]
         
         search = GoogleSearch(params)
         results = search.get_dict()
@@ -108,7 +109,7 @@ def analyze_with_gemini(data_dict, lang_name):
     Analyzes reviews using Gemini to find 5-10 pain points.
     """
     genai.configure(api_key=GENAI_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     
     # Prepare text for prompt
     prompt_context = ""
@@ -187,7 +188,7 @@ st.info("💡 Don't know the Place ID? Use the [Google Place ID Finder](https://
 col1, col2 = st.columns(2)
 with col1:
     target_id = st.text_input("Main Place ID (Required)", placeholder="e.g. ChIJ...")
-    target_name = "Main Business" # Default label since we don't have the name yet
+    target_name = "Main Business" # Default label
 with col2:
     competitor_id = st.text_input("Competitor Place ID (Optional)", placeholder="e.g. ChIJ...")
     competitor_name = "Competitor"
